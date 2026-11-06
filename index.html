@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rette e parabole — Laboratorio interattivo</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f6fb;color:#17243b;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:auto;padding:16px}h1{font-size:clamp(23px,4vw,32px);margin:8px 0}p{color:#62718a}
+.tabs,.buttons{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+button{font:inherit;border:1px solid #cbd6e7;background:white;border-radius:10px;padding:10px 14px;color:#20385e;cursor:pointer}
+button.active,button.primary{background:#235bd6;color:white;border-color:#235bd6}
+.layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(270px,1fr);gap:14px}
+.panel{background:white;border:1px solid #dde5f0;border-radius:16px;padding:14px;min-width:0}
+canvas{display:block;width:100%;height:auto;aspect-ratio: 720 / 540;touch-action:none;background:white;border-radius:10px}
+.formula{font-size:24px;font-weight:700;text-align:center;margin:5px 0 20px}
+.control{margin:17px 0}.head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.head label{font-weight:600;font-size:14px}.head input{width:86px;font-size:16px;padding:7px;border:1px solid #cad5e6;border-radius:8px}
+input[type=range]{width:100%;accent-color:#235bd6;margin:12px 0 0}
+.facts{background:#f3f6fc;border-radius:12px;padding:12px;font-size:14px;line-height:1.9;margin-top:15px}
+.check{display:block;margin:12px 0;font-size:14px}.note{font-size:13px;color:#64748b}
+@media(max-width:750px){.layout{grid-template-columns:1fr}main{padding:10px}.panel{padding:10px}}
+</style></head><body><main>
+<h1>Laboratorio di rette e parabole</h1><p>Muovi i coefficienti: il grafico cambia immediatamente. Funziona anche senza internet.</p>
+<div class="tabs"><button id="tabLine" class="active">Retta</button><button id="tabQuad">Parabola</button></div>
+<div class="layout"><section class="panel">
+<canvas id="plot" width="720" height="540">Il browser non supporta il grafico.</canvas>
+<div class="buttons"><button id="zin">+ Zoom</button><button id="zout">− Zoom</button><button id="center">Centra</button></div>
+<div class="note">Trascina il grafico con il dito o la penna per spostare gli assi.</div>
+</section><section class="panel">
+<div id="formula" class="formula">y = x</div><div id="controls"></div>
+<label class="check"><input type="checkbox" id="points" checked> Mostra punti notevoli</label>
+<label class="check"><input type="checkbox" id="compare"> Mostra curva memorizzata</label>
+<div class="buttons"><button class="primary" id="save">Memorizza per confronto</button><button id="reset">Ripristina</button></div>
+<div id="facts" class="facts"></div></section></div></main>
+<script>
+(function(){
+"use strict";
+var canvas=document.getElementById("plot"),ctx=canvas.getContext("2d");
+var W=720,H=540,mode="line",scale=35,ox=360,oy=270;
+var values={line:{m:1,q:0},quad:{a:1,b:0,c:0}},saved={line:null,quad:null};
+function id(s){return document.getElementById(s)}
+function fmt(x){if(Math.abs(x)<0.000001)x=0;return String(Math.round(x*1000)/1000).replace(".",",")}
+function fields(){return mode==="line"?[["m","Pendenza m",-8,8],["q","Intercetta q",-10,10]]:[["a","Coefficiente a",-5,5],["b","Coefficiente b",-10,10],["c","Coefficiente c",-10,10]]}
+function f(x,v){return mode==="line"?v.m*x+v.q:v.a*x*x+v.b*x+v.c}
+function formula(v){if(mode==="line")return "y = "+fmt(v.m)+"x "+(v.q<0?"− ":"+ ")+fmt(Math.abs(v.q));return "y = "+fmt(v.a)+"x² "+(v.b<0?"− ":"+ ")+fmt(Math.abs(v.b))+"x "+(v.c<0?"− ":"+ ")+fmt(Math.abs(v.c))}
+function rebuild(){
+var holder=id("controls");holder.innerHTML="";
+fields().forEach(function(spec){
+var key=spec[0],wrap=document.createElement("div");wrap.className="control";
+var head=document.createElement("div");head.className="head";
+var label=document.createElement("label");label.textContent=spec[1];
+var num=document.createElement("input");num.type="number";num.step="0.1";num.value=values[mode][key];
+var range=document.createElement("input");range.type="range";range.min=spec[2];range.max=spec[3];range.step="0.1";range.value=values[mode][key];
+head.appendChild(label);head.appendChild(num);wrap.appendChild(head);wrap.appendChild(range);holder.appendChild(wrap);
+range.addEventListener("input",function(){values[mode][key]=Number(range.value);num.value=range.value;draw()});
+num.addEventListener("input",function(){if(num.value.trim()!==""&&isFinite(Number(num.value))){values[mode][key]=Number(num.value);range.value=Math.max(spec[2],Math.min(spec[3],values[mode][key]));draw()}});
+});
+draw()
+}
+function line(x1,y1,x2,y2,color,width,dash){ctx.beginPath();ctx.setLineDash(dash||[]);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.setLineDash([])}
+function label(x,y,s,color){ctx.font="14px -apple-system,Arial,sans-serif";ctx.fillStyle=color||"#64748b";ctx.fillText(s,x,y)}
+var pendingMarks=[];
+function mark(x,y,s,color){
+ var px=ox+x*scale,py=oy-y*scale;
+ if(!isFinite(px)||!isFinite(py)||px<8||px>W-8||py<8||py>H-8)return;
+ // Un solo cartellino per i punti coincidenti: il vertice ha la priorità.
+ var priority=s.indexOf("V(")===0?3:s.indexOf("x")===0?2:1;
+ for(var i=0;i<pendingMarks.length;i++){
+  var old=pendingMarks[i];
+  if(Math.hypot(px-old.px,py-old.py)<9){if(priority>old.priority)pendingMarks[i]={px:px,py:py,s:s,color:color||"#235bd6",priority:priority};return}
+ }
+ pendingMarks.push({px:px,py:py,s:s,color:color||"#235bd6",priority:priority});
+}
+function renderMarks(){
+ var used=[];
+ pendingMarks.sort(function(a,b){return b.priority-a.priority});
+ pendingMarks.forEach(function(p){
+  ctx.beginPath();ctx.arc(p.px,p.py,5,0,Math.PI*2);ctx.fillStyle=p.color;ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();
+  ctx.font="bold 15px -apple-system,Arial,sans-serif";
+  var w=ctx.measureText(p.s).width+18,h=27;
+  var positions=[[12,-h-10],[12,12],[-w-12,-h-10],[-w-12,12],[12,-h-35],[-w-12,37],[22,-h/2],[-w-22,-h/2]];
+  var best=null,bestScore=Infinity;
+  positions.forEach(function(offset){
+   var x=p.px+offset[0],y=p.py+offset[1];
+   var overflow=Math.max(0,-x)+Math.max(0,x+w-W)+Math.max(0,-y)+Math.max(0,y+h-H);
+   var overlap=0;
+   used.forEach(function(r){var iw=Math.max(0,Math.min(x+w,r.x+r.w)-Math.max(x,r.x));var ih=Math.max(0,Math.min(y+h,r.y+r.h)-Math.max(y,r.y));overlap+=iw*ih});
+   var score=overflow*1000+overlap*10;
+   if(score<bestScore){bestScore=score;best={x:x,y:y,w:w,h:h}}
+  });
+  if(!best)return;
+  var x=Math.max(3,Math.min(W-w-3,best.x)),y=Math.max(3,Math.min(H-h-3,best.y));
+  used.push({x:x,y:y,w:w,h:h});
+  ctx.fillStyle="rgba(255,255,255,.97)";ctx.strokeStyle="#cbd5e1";ctx.lineWidth=1;
+  ctx.beginPath();ctx.roundRect(x,y,w,h,7);ctx.fill();ctx.stroke();
+  ctx.fillStyle=p.color;ctx.fillText(p.s,x+9,y+18);
+ });
+}
+function curve(v,color,dash){ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();ctx.beginPath();ctx.setLineDash(dash?[9,7]:[]);ctx.strokeStyle=color;ctx.lineWidth=dash?2.5:3.5;var started=false;
+for(var px=0;px<=W;px+=2){var x=(px-ox)/scale,py=oy-f(x,v)*scale;if(!isFinite(py)||Math.abs(py)>100000){started=false;continue}if(!started){ctx.moveTo(px,py);started=true}else ctx.lineTo(px,py)}
+ctx.stroke();ctx.restore()}
+function draw(){
+pendingMarks=[];
+ctx.clearRect(0,0,W,H);ctx.fillStyle="#fff";ctx.fillRect(0,0,W,H);
+var step=Math.pow(10,Math.floor(Math.log10(75/scale)));if(step*scale<38)step*=2;
+var minx=-ox/scale,maxx=(W-ox)/scale,miny=(oy-H)/scale,maxy=oy/scale;
+for(var x=Math.ceil(minx/step)*step;x<=maxx;x+=step){var px=ox+x*scale;line(px,0,px,H,"#e8edf5",1);if(Math.abs(x)>step/10&&oy>0&&oy<H)label(px+3,Math.min(H-4,Math.max(15,oy+16)),fmt(x))}
+for(var y=Math.ceil(miny/step)*step;y<=maxy;y+=step){var py=oy-y*scale;line(0,py,W,py,"#e8edf5",1);if(Math.abs(y)>step/10&&ox>0&&ox<W)label(ox+6,py-5,fmt(y))}
+line(0,oy,W,oy,"#8190a5",1.7);line(ox,0,ox,H,"#8190a5",1.7);
+if(oy>0&&oy<H)label(W-18,oy-10,"x","#334155");if(ox>0&&ox<W)label(ox+10,18,"y","#334155");
+var v=values[mode];id("formula").textContent=formula(v);
+if(id("compare").checked&&saved[mode])curve(saved[mode],"#e68a35",true);
+curve(v,"#235bd6",false);
+var facts=[];
+if(mode==="line"){
+facts.push("<b>Pendenza:</b> m = "+fmt(v.m));
+facts.push("<b>Intercetta sull’asse y:</b> (0; "+fmt(v.q)+")");
+if(v.m!==0)facts.push("<b>Intercetta sull’asse x:</b> ("+fmt(-v.q/v.m)+"; 0)");
+else facts.push(v.q===0?"La retta coincide con l’asse x.":"La retta è orizzontale.");
+facts.push(v.m>0?"Retta crescente.":v.m<0?"Retta decrescente.":"Funzione costante.");
+if(id("points").checked){mark(0,v.q,"(0; "+fmt(v.q)+")");if(v.m!==0&&v.q!==0)mark(-v.q/v.m,0,"("+fmt(-v.q/v.m)+"; 0)")}
+}else{
+var a=v.a,b=v.b,c=v.c;
+if(Math.abs(a)<0.00000001){
+facts.push("<b>a = 0:</b> il grafico è una retta, non una parabola.");
+if(b!==0){facts.push("<b>Radice:</b> x = "+fmt(-c/b));if(id("points").checked)mark(-c/b,0,"x = "+fmt(-c/b))}
+else facts.push(c===0?"Funzione identicamente nulla.":"Funzione costante.");
+if(id("points").checked)mark(0,c,"(0; "+fmt(c)+")");
+}else{
+var delta=b*b-4*a*c,xv=-b/(2*a),yv=f(xv,v);
+facts.push("<b>Concavità:</b> verso "+(a>0?"l’alto":"il basso"));
+facts.push("<b>Vertice:</b> V("+fmt(xv)+"; "+fmt(yv)+")");
+facts.push("<b>Asse di simmetria:</b> x = "+fmt(xv));
+facts.push("<b>Discriminante:</b> Δ = "+fmt(delta));
+if(delta>0){var r1=(-b-Math.sqrt(delta))/(2*a),r2=(-b+Math.sqrt(delta))/(2*a);facts.push("<b>Due radici reali:</b> "+fmt(r1)+" e "+fmt(r2));if(id("points").checked){mark(r1,0,"x₁ = "+fmt(r1));mark(r2,0,"x₂ = "+fmt(r2))}}
+else if(delta===0)facts.push("<b>Radice doppia:</b> x = "+fmt(xv));
+else facts.push("<b>Nessuna radice reale.</b>");
+if(id("points").checked){line(ox+xv*scale,0,ox+xv*scale,H,"#e8a24d",1.5,[6,6]);mark(xv,yv,"V("+fmt(xv)+"; "+fmt(yv)+")");mark(0,c,"(0; "+fmt(c)+")")}
+}}
+renderMarks();
+id("facts").innerHTML=facts.join("<br>")
+}
+function setMode(m){mode=m;id("tabLine").className=m==="line"?"active":"";id("tabQuad").className=m==="quad"?"active":"";id("compare").checked=false;rebuild()}
+id("tabLine").onclick=function(){setMode("line")};id("tabQuad").onclick=function(){setMode("quad")};
+id("points").onchange=draw;id("compare").onchange=draw;
+id("save").onclick=function(){saved[mode]=Object.assign({},values[mode]);id("compare").checked=true;draw()};
+id("reset").onclick=function(){values[mode]=mode==="line"?{m:1,q:0}:{a:1,b:0,c:0};rebuild()};
+id("zin").onclick=function(){scale=Math.min(300,scale*1.3);draw()};
+id("zout").onclick=function(){scale=Math.max(7,scale/1.3);draw()};
+id("center").onclick=function(){scale=35;ox=360;oy=270;draw()};
+var dragging=false,lastX=0,lastY=0;
+canvas.addEventListener("pointerdown",function(e){dragging=true;lastX=e.clientX;lastY=e.clientY;if(canvas.setPointerCapture)canvas.setPointerCapture(e.pointerId)});
+canvas.addEventListener("pointermove",function(e){if(!dragging)return;var r=canvas.getBoundingClientRect();ox+=(e.clientX-lastX)*W/r.width;oy+=(e.clientY-lastY)*H/r.height;lastX=e.clientX;lastY=e.clientY;draw()});
+canvas.addEventListener("pointerup",function(){dragging=false});canvas.addEventListener("pointercancel",function(){dragging=false});
+rebuild()
+})();
+</script></body></html>
